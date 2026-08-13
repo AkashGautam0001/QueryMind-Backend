@@ -1,21 +1,36 @@
-from app.config import get_settings
-from app.generation.anthropic_provider import AnthropicProvider
+from collections.abc import AsyncIterator
+from anthropic import AsyncAnthropic
 
-_llm_provider: AnthropicProvider | None = None
+from app.generation.llm_provider import LLMProvider
 
+class AnthropicProvider(LLMProvider):
+    def __init__(self, api_key: str, model : str):
+        self.model = model
+        self._client = AsyncAnthropic(api_key=api_key)
 
-def get_llm_provider() -> AnthropicProvider:
-    global _llm_provider
-    if _llm_provider is None:
-        settings = get_settings()
-        _llm_provider = AnthropicProvider(
-            api_key=settings.anthropic_api_key, model=settings.generation_model
+    async def stream(self, system_prompt: str, messages: list[dict], max_tokens: int, temperature: float) -> AsyncIterator[str]:
+        async with self._client.message.stream(
+            model=self.model,
+            system=system_prompt,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        ) as stream:
+            async for text in stream.text_stream:
+                yield text
+
+    
+    async def complete(
+        self, system_prompt: str, messages: list[dict], max_tokens: int, temperature: float
+    ) -> str:
+        response = await self._client.messages.create(
+            model=self.model,
+            system=system_prompt,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
         )
-    return _llm_provider
+        return "".join(block.text for block in response.content if block.type == "text")
 
-
-async def close_llm_provider() -> None:
-    global _llm_provider
-    if _llm_provider is not None:
-        await _llm_provider.close()
-        _llm_provider = None
+    async def close(self) -> None:
+        await self._client.close()
